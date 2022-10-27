@@ -6,42 +6,41 @@ Author: nghuyong
 Mail: nghuyong@163.com
 Created Time: 2020/4/14
 """
-import re
-
+import json
 from scrapy import Spider
-from scrapy.selector import Selector
 from scrapy.http import Request
-from items import RelationshipItem
-import time
+from spiders.comment import parse_user_info
 
 
 class FollowerSpider(Spider):
-    name = "follower_spider"
-    base_url = "https://weibo.cn"
+    """
+    微博关注数据采集
+    """
+    name = "follower"
 
     def start_requests(self):
-        user_ids = ['1087770692', '1699432410', '1266321801']
-        urls = [f"{self.base_url}/{user_id}/follow?page=1" for user_id in user_ids]
-        for url in urls:
-            yield Request(url, callback=self.parse)
+        """
+        爬虫入口
+        """
+        # 这里user_ids可替换成实际待采集的数据
+        user_ids = ['1087770692']
+        for user_id in user_ids:
+            url = f"https://weibo.com/ajax/friendships/friends?page=1&uid={user_id}"
+            yield Request(url, callback=self.parse, meta={'user_id': user_id, 'page_num': 1})
 
-    def parse(self, response):
-        if response.url.endswith('page=1'):
-            all_page = re.search(r'/>&nbsp;1/(\d+)页</div>', response.text)
-            if all_page:
-                all_page = all_page.group(1)
-                all_page = int(all_page)
-                for page_num in range(2, all_page + 1):
-                    page_url = response.url.replace('page=1', 'page={}'.format(page_num))
-                    yield Request(page_url, self.parse, dont_filter=True, meta=response.meta)
-        selector = Selector(response)
-        urls = selector.xpath('//a[text()="关注他" or text()="关注她" or text()="取消关注"]/@href').extract()
-        uids = re.findall('uid=(\d+)', ";".join(urls), re.S)
-        ID = re.findall('(\d+)/follow', response.url)[0]
-        for uid in uids:
-            relationships_item = RelationshipItem()
-            relationships_item['crawl_time'] = int(time.time())
-            relationships_item["fan_id"] = ID
-            relationships_item["followed_id"] = uid
-            relationships_item["_id"] = ID + '-' + uid
-            yield relationships_item
+    def parse(self, response, **kwargs):
+        """
+        网页解析
+        """
+        data = json.loads(response.text)
+        for user in data['users']:
+            item = dict()
+            item['fan_id'] = response.meta['user_id']
+            item['follower_info'] = parse_user_info(user)
+            item['_id'] = response.meta['user_id'] + '_' + item['follower_info']['_id']
+            yield item
+        if data['users']:
+            user_id, page_num = response.meta['user_id'], response.meta['page_num']
+            page_num += 1
+            url = f"https://weibo.com/ajax/friendships/friends?relate=fans&page={page_num}&uid={user_id}&type=fans"
+            yield Request(url, callback=self.parse, meta={'user_id': user_id, 'page_num': page_num})
